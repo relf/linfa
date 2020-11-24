@@ -30,4 +30,5 @@ mod utils;
 pub use dbscan::*;
 pub use gaussian_mixture::*;
 pub use k_means::*;
+pub use linfa::*;
 pub use utils::*;

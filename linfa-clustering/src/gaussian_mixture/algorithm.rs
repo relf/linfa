@@ -147,6 +147,11 @@ impl<F: Float + Lapack + Scalar> GaussianMixtureModel<F> {
         self.means()
     }
 
+    pub fn predict_proba<D: Data<Elem = F>>(&self, observations: &ArrayBase<D, Ix2>) -> Array2<F> {
+        let (_, log_resp) = self.estimate_log_prob_resp(observations);
+        log_resp.mapv(|v| v.exp())
+    }
+
     fn new<D: Data<Elem = F>, R: Rng + Clone, T: Targets>(
         hyperparameters: &GmmHyperParams<F, R>,
         dataset: &Dataset<ArrayBase<D, Ix2>, T>,
@@ -164,8 +169,10 @@ impl<F: Float + Lapack + Scalar> GaussianMixtureModel<F> {
                     .build()
                     .fit(&dataset)?;
                 let mut resp = Array::<F, Ix2>::zeros((n_samples, hyperparameters.n_clusters()));
+                println!("model centroids = {:?}", model.centroids());
+                println!("resp = {:?}", model.predict(dataset.records()));
                 for (k, idx) in model.predict(dataset.records()).iter().enumerate() {
-                    resp[[k, *idx]] = F::from(1.).unwrap();
+                    resp[[k, *idx]] = F::one();
                 }
                 resp
             }
@@ -183,13 +190,24 @@ impl<F: Float + Lapack + Scalar> GaussianMixtureModel<F> {
 
         // We compute an initial GMM model from dataset and initial responsabilities wrt
         // to covariance specification.
-        let (mut weights, means, covariances) = Self::estimate_gaussian_parameters(
+        let (mut weights, mut means, mut covariances) = Self::estimate_gaussian_parameters(
             &observations,
             &resp,
             hyperparameters.covariance_type(),
             hyperparameters.reg_covariance(),
         )?;
         weights /= F::from(n_samples).unwrap();
+
+        // Use user-defined gaussian parameters
+        if let Some(weights_init) = hyperparameters.weights() {
+            weights = weights_init.to_owned();
+        }
+        if let Some(means_init) = hyperparameters.means() {
+            means = means_init.to_owned();
+        }
+        if let Some(covariances_init) = hyperparameters.covariances() {
+            covariances = covariances_init.to_owned();
+        }
 
         // GmmCovarType = full
         let precisions_chol = Self::compute_precisions_cholesky_full(&covariances)?;
@@ -410,28 +428,34 @@ impl<'a, F: Float + Lapack + Scalar, R: Rng + Clone, D: Data<Elem = F>, T: Targe
 
         let n_runs = self.n_runs();
 
-        for _ in 0..n_runs {
-            let mut lower_bound = -F::infinity();
+        if self.weights().is_some() && self.means().is_some() && self.covariances().is_some() {
+            gmm.refresh_precisions_full();
+            best_params = Some(gmm);
+            best_iter = Some(0);
+        } else {
+            for _ in 0..n_runs {
+                let mut lower_bound = -F::infinity();
 
-            let mut converged_iter: Option<u64> = None;
-            for n_iter in 0..self.max_n_iterations() {
-                let prev_lower_bound = lower_bound;
-                let (log_prob_norm, log_resp) = gmm.e_step(&observations)?;
-                gmm.m_step(self.reg_covariance(), &observations, &log_resp)?;
-                lower_bound =
-                    GaussianMixtureModel::<F>::compute_lower_bound(&log_resp, log_prob_norm);
-                let change = lower_bound - prev_lower_bound;
-                if change.abs() < self.tolerance() {
-                    converged_iter = Some(n_iter);
-                    break;
+                let mut converged_iter: Option<u64> = None;
+                for n_iter in 0..self.max_n_iterations() {
+                    let prev_lower_bound = lower_bound;
+                    let (log_prob_norm, log_resp) = gmm.e_step(&observations)?;
+                    gmm.m_step(self.reg_covariance(), &observations, &log_resp)?;
+                    lower_bound =
+                        GaussianMixtureModel::<F>::compute_lower_bound(&log_resp, log_prob_norm);
+                    let change = lower_bound - prev_lower_bound;
+                    if change.abs() < self.tolerance() {
+                        converged_iter = Some(n_iter);
+                        break;
+                    }
                 }
-            }
 
-            if lower_bound > max_lower_bound {
-                max_lower_bound = lower_bound;
-                gmm.refresh_precisions_full();
-                best_params = Some(gmm.clone());
-                best_iter = converged_iter;
+                if lower_bound > max_lower_bound {
+                    max_lower_bound = lower_bound;
+                    gmm.refresh_precisions_full();
+                    best_params = Some(gmm.clone());
+                    best_iter = converged_iter;
+                }
             }
         }
 
@@ -482,7 +506,7 @@ mod tests {
     use super::*;
     use crate::generate_blobs;
     use approx::assert_abs_diff_eq;
-    use ndarray::{array, ArrayView1, ArrayView2, Axis};
+    use ndarray::{array, stack, ArrayView1, ArrayView2, Axis};
     use ndarray_linalg::error::Result as LAResult;
     use ndarray_rand::rand::SeedableRng;
     use ndarray_rand::rand_distr::{Distribution, StandardNormal};
@@ -510,6 +534,37 @@ mod tests {
             // use Cholesky decomposition to obtain a sample of our general multivariate normal
             self.mean.clone() + self.lower.view().dot(&res)
         }
+    }
+
+    fn function_test_1d(x: &Array2<f64>) -> Array2<f64> {
+        let mut y = Array2::zeros(x.dim());
+        Zip::from(&mut y).and(x).apply(|yi, &xi| {
+            if xi < 0.4 {
+                *yi = xi * xi;
+            } else if xi >= 0.4 && xi < 0.8 {
+                *yi = 3. * xi + 1.;
+            } else {
+                *yi = f64::sin(10. * xi);
+            }
+        });
+        y
+    }
+
+    #[test]
+    fn test_gmm_fit_function() {
+        let mut rng = Isaac64Rng::seed_from_u64(42);
+        let xt = Array2::random_using((50, 1), Uniform::new(0., 1.), &mut rng);
+        let yt = function_test_1d(&xt);
+        let data = stack(Axis(1), &[xt.view(), yt.view()]).unwrap();
+        let dataset = Dataset::from(data);
+        let gmm = GaussianMixtureModel::params(3)
+            .with_reg_covariance(1e-5)
+            .with_rng(rng)
+            .fit(&dataset)
+            .expect("GMM fitting");
+        println!("weights={:?}", gmm.weights());
+        println!("means={:?}", gmm.means());
+        println!("covariances={:?}", gmm.covariances());
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use crate::gaussian_mixture::errors::{GmmError, Result};
 use linfa::Float;
+use ndarray::{Array1, Array2, Array3};
 use ndarray_rand::rand::{Rng, SeedableRng};
 use rand_isaac::Isaac64Rng;
 #[cfg(feature = "serde")]
@@ -47,6 +48,9 @@ pub struct GmmHyperParams<F: Float, R: Rng> {
     n_runs: u64,
     max_n_iter: u64,
     init_method: GmmInitMethod,
+    weights: Option<Array1<F>>,
+    means: Option<Array2<F>>,
+    covariances: Option<Array3<F>>,
     rng: R,
 }
 
@@ -63,10 +67,13 @@ impl<F: Float, R: Rng + Clone> GmmHyperParams<F, R> {
             n_clusters,
             covar_type: GmmCovarType::Full,
             tolerance: F::from(1e-3).unwrap(),
-            reg_covar: F::from(0.).unwrap(),
+            reg_covar: F::from(1e-6).unwrap(),
             n_runs: 1,
             max_n_iter: 100,
             init_method: GmmInitMethod::KMeans,
+            weights: None,
+            means: None,
+            covariances: None,
             rng,
         }
     }
@@ -97,6 +104,18 @@ impl<F: Float, R: Rng + Clone> GmmHyperParams<F, R> {
 
     pub fn init_method(&self) -> &GmmInitMethod {
         &self.init_method
+    }
+
+    pub fn weights(&self) -> &Option<Array1<F>> {
+        &self.weights
+    }
+
+    pub fn means(&self) -> &Option<Array2<F>> {
+        &self.means
+    }
+
+    pub fn covariances(&self) -> &Option<Array3<F>> {
+        &self.covariances
     }
 
     pub fn rng(&self) -> R {
@@ -140,6 +159,21 @@ impl<F: Float, R: Rng + Clone> GmmHyperParams<F, R> {
         self
     }
 
+    pub fn with_weights(mut self, weights: Array1<F>) -> Self {
+        self.weights = Some(weights);
+        self
+    }
+
+    pub fn with_means(mut self, means: Array2<F>) -> Self {
+        self.means = Some(means);
+        self
+    }
+
+    pub fn with_covariances(mut self, covariances: Array3<F>) -> Self {
+        self.covariances = Some(covariances);
+        self
+    }
+
     pub fn with_rng<R2: Rng + Clone>(self, rng: R2) -> GmmHyperParams<F, R2> {
         GmmHyperParams {
             n_clusters: self.n_clusters,
@@ -149,6 +183,9 @@ impl<F: Float, R: Rng + Clone> GmmHyperParams<F, R> {
             n_runs: self.n_runs,
             max_n_iter: self.max_n_iter,
             init_method: self.init_method,
+            weights: self.weights,
+            means: self.means,
+            covariances: self.covariances,
             rng,
         }
     }
@@ -178,6 +215,9 @@ impl<F: Float, R: Rng + Clone> GmmHyperParams<F, R> {
                 "`max_n_iterations` cannot be 0!".to_string(),
             ));
         }
+
+        // TODO: validate weights, means, covariances
+
         Ok(())
     }
 }
