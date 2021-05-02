@@ -1,6 +1,9 @@
 use crate::errors::{PlsError, Result};
 use crate::{utils, Float};
-use linfa::{dataset::Records, traits::Fit, traits::Transformer, DatasetBase};
+use linfa::{
+    dataset::Records, dataset::WithLapack, dataset::WithoutLapack, traits::Fit,
+    traits::Transformer, DatasetBase,
+};
 use ndarray::{s, Array1, Array2, ArrayBase, Data, Ix2};
 use ndarray_linalg::svd::*;
 
@@ -69,7 +72,7 @@ impl<F: Float, D: Data<Elem = F>> Fit<ArrayBase<D, Ix2>, ArrayBase<D, Ix2>, PlsE
             utils::center_scale_dataset(&dataset, self.scale);
 
         // Compute SVD of cross-covariance matrix
-        let c = x.t().dot(&y);
+        let c = x.t().dot(&y).with_lapack();
         let (u, _, vt) = c.svd(true, true)?;
         // safe unwraps because both parameters are set to true in above call
         let u = u.unwrap().slice_move(s![.., ..self.n_components]);
@@ -77,8 +80,8 @@ impl<F: Float, D: Data<Elem = F>> Fit<ArrayBase<D, Ix2>, ArrayBase<D, Ix2>, PlsE
         let (u, vt) = utils::svd_flip(u, vt);
         let v = vt.reversed_axes();
 
-        let x_weights = u;
-        let y_weights = v;
+        let x_weights = u.without_lapack();
+        let y_weights = v.without_lapack();
 
         Ok(PlsSvd {
             x_mean,

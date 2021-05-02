@@ -44,18 +44,18 @@ mod utils;
 
 use crate::pls_generic::*;
 
-use linfa::{traits::Fit, traits::PredictRef, traits::Transformer, DatasetBase};
+use linfa::{traits::Fit, traits::PredictRef, traits::Transformer, DatasetBase, Float};
 use ndarray::{Array2, ArrayBase, Data, Ix2};
-use ndarray_linalg::{Lapack, Scalar};
+// use ndarray_linalg::{Lapack, Scalar};
 
 pub use errors::*;
 pub use pls_svd::*;
 
-/// Add Scalar and Lapack trait bounds to the common Float trait
-pub trait Float: linfa::Float + Scalar + Lapack {}
+// /// Add Scalar and Lapack trait bounds to the common Float trait
+// pub trait Float: linfa::Float + Scalar + Lapack {}
 
-impl Float for f32 {}
-impl Float for f64 {}
+// impl Float for f32 {}
+// impl Float for f64 {}
 
 macro_rules! pls_algo { ($name:ident) => {
     paste::item! {
